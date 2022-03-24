@@ -1,0 +1,8 @@
+prefix=/home/ajoglek/Mecc_22_ws/devel
+
+Name: RL_PP
+Description: Description of RL_PP
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

@@ -1,0 +1,2 @@
+mecc_rl_pp
+-DCATKIN_DEVEL_PREFIX=/home/ajoglek/Mecc_22_ws/devel -DCMAKE_INSTALL_PREFIX=/home/ajoglek/Mecc_22_ws/install -G Unix Makefiles
