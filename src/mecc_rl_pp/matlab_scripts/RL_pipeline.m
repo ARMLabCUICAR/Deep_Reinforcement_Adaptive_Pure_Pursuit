@@ -4,18 +4,21 @@ rosinit(ipaddress)
 
 %% Load Rosbag and Pure Pursuit
 
-bag = rosbag('/home/ajoglek/husky_ws/src/huskynick/bags/waypoints_2022-03-16-18-14-25.bag');
-msgs = readMessages(bag);
-r=size(msgs,1);
-path = zeros(r,2);
-for i = 1:r
-    x = msgs{i,1}.Pose.Pose.Position.X;
-    y = msgs{i,1}.Pose.Pose.Position.Y;
-    path(i,1) = x;
-    path(i,2) = y;
-end
+% bag = rosbag('/home/ajoglek/husky_ws/src/huskynick/bags/waypoints_2022-03-16-18-14-25.bag');
+% msgs = readMessages(bag);
+% r=size(msgs,1);
+% path = zeros(r,2);
+% for i = 1:r
+%     x = msgs{i,1}.Pose.Pose.Position.X;
+%     y = msgs{i,1}.Pose.Pose.Position.Y;
+%     path(i,1) = x;
+%     path(i,2) = y;
+% end
+path = load ('/home/ajoglek/Downloads/updated_rectangle_path.mat');
+path = double(path.path); 
+path = [path;path;path];
 
-path = [path;path;path;path];
+% path = [path;path;path;path];
 
 % controller = controllerPurePursuit;
 % controller.Waypoints = path;
@@ -38,12 +41,13 @@ color_msg = rosmessage('std_msgs/ColorRGBA');
 color_msg.B = 1.0;
 color_msg.A = 1.0;
 viz_msg.Colors = color_msg;
+
 %% RL setup
 %Observations space
-ObservationInfo = rlNumericSpec([7 1]);
+ObservationInfo = rlNumericSpec([8 1]);
 %                   "LowerLimit",zeros(2,1),...
 %                   "UpperLimit",ones(2,1)*10);
-ObservationInfo.Name = 'pose X, pose Y,eul Z, cross_track_error,lookahead_x,lookahead_y,lin_vel';
+ObservationInfo.Name = 'pose X, pose Y,eul Z, imu_vel_z,cross_track_error,lookahead_x,lookahead_y,lin_vel';
 %X, Y, Vel X, Vel Y, cross_track_error, imu z vel,
 % ObservationInfo.Description = 'r, l';
 
@@ -57,9 +61,8 @@ ActionInfo.Description = 'forward vel,lookahead_dist';
 
 %Publishers and subscribers
 [vel_pub,vel_msg] = rospublisher("/husky_velocity_controller/cmd_vel", "geometry_msgs/Twist");
-% [pose_pub,pose_msg] = rospublisher("/pose","geometry_msgs/PoseStamped");
-% laser_sub = rossubscriber('/scan');
 pose_sub = rossubscriber('/amcl_pose');
+imu_sub = rossubscriber('/imu/data','DataFormat','struct');
 
 %Rosservice setup
 % Reset model_state service
@@ -109,7 +112,9 @@ envConstants.controller.LookaheadDistance = 0.2;
 envConstants.robotGoal = path(end,:);
 envConstants.viz_pub = viz_pub;
 envConstants.viz_msg = viz_msg;
+envConstants.imu_sub = imu_sub;
 
+disp('Entering loop')
 StepHandle = @(Action,LoggedSignals) myStepFunctionCustom(Action,LoggedSignals,envConstants);
 ResetHandle = @() myResetFunctionCustom(envConstants);
 % [InitialObservation,LoggedSignals] = myResetFunction(envConstants);
@@ -121,7 +126,7 @@ env = rlFunctionEnv(ObservationInfo,ActionInfo,StepHandle,ResetHandle);
 L = 100; % number of neurons
 
 statePath = [
-    featureInputLayer(7,'Normalization','none','Name','observation')
+    featureInputLayer(8,'Normalization','none','Name','observation')
     fullyConnectedLayer(L,'Name','fc1')
     reluLayer('Name','relu1')
     fullyConnectedLayer(L,'Name','fc2')
@@ -144,8 +149,10 @@ critic = rlQValueRepresentation(criticNetwork,ObservationInfo,ActionInfo,...
 
 %% Actor
 
+scale = [0.15 0.95]';
+bias = [0.35 1.05 ]';
 actorNetwork = [
-    featureInputLayer(7,'Normalization','none','Name','observation')
+    featureInputLayer(8,'Normalization','none','Name','observation')
     fullyConnectedLayer(L,'Name','fc1')
     reluLayer('Name','relu1')
     fullyConnectedLayer(L,'Name','fc2')
@@ -154,7 +161,7 @@ actorNetwork = [
     reluLayer('Name','relu3')
     fullyConnectedLayer(2,'Name','fc4')
     tanhLayer('Name','tanh1')
-    scalingLayer('Name','ActorScaling1','Scale',2.75,'Bias',3.75)];
+    scalingLayer('Name','ActorScaling1','Scale',scale,'Bias',bias)];
 actorOptions = rlRepresentationOptions('LearnRate',1e-3,'GradientThreshold',1,'L2RegularizationFactor',1e-4);
 actor = rlDeterministicActorRepresentation(actorNetwork,ObservationInfo,ActionInfo,'Observation',{'observation'},'Action',{'ActorScaling1'},actorOptions);
 
@@ -170,7 +177,7 @@ agentOptions = rlTD3AgentOptions(...
 % agentOptions.NoiseOptions.StandardDeviationDecayRate = 1e-3;
 
 agent = rlTD3Agent(actor,critic,agentOptions);
-maxepisodes = 1000;
+maxepisodes = 250;
 maxsteps = 500;
 trainingOpts = rlTrainingOptions('MaxEpisodes',maxepisodes,'MaxStepsPerEpisode',maxsteps,'Verbose',false,'Plots','training-progress','StopTrainingCriteria','EpisodeReward','StopTrainingValue',7500);
 
@@ -217,8 +224,6 @@ send(envConstants.viz_pub,envConstants.viz_msg)
 
 envConstants.vel_msg.Linear.X = VelCommand;
 envConstants.vel_msg.Angular.Z = omega;
-% [angle_input] = pid_input(envConstants);
-% envConstants.vel_msg.Drive.SteeringAngle = angle_input;
 send(envConstants.vel_pub,envConstants.vel_msg);
 
 % n = 0.25;
@@ -229,6 +234,7 @@ send(envConstants.vel_pub,envConstants.vel_msg);
 
 % Get the new state 
 pose = get_pose(envConstants);
+imu = receive(envConstants.imu_sub);
 call(envConstants.gazebo_pause_client,envConstants.gazebo_pause_req,"Timeout",3);
 cross_track_error = cte(pose,envConstants.controller);
 
@@ -236,7 +242,7 @@ cross_track_error = cte(pose,envConstants.controller);
 %     setGlobaldata(X,Y,Z,VelCommand,angle_input,Obs_Vel,lateral_error,front_error)
 % end
 
-temp = [pose(1);pose(2);pose(3);cross_track_error;lookahead_pt(1);lookahead_pt(2);VelCommand];
+temp = [pose(1);pose(2);pose(3);imu.AngularVelocity.Z;cross_track_error;lookahead_pt(1);lookahead_pt(2);VelCommand];
 LoggedSignals.State = double(temp);
 NextObs = LoggedSignals.State;
     
@@ -245,14 +251,15 @@ dist_travel = (old_state.State(1) - pose(1))^2 + (old_state.State(2) - pose(2))^
 
 get_dist = getGlobal_dist_covered;
 total_distance = get_dist + dist_travel;
-distanceToGoal = norm(pose(1:2) - envConstants.robotGoal(:));
+% distanceToGoal = norm(pose(1:2) - envConstants.robotGoal(:));
 setGlobal_dist_covered(total_distance)
 
 IsDone =   cross_track_error > envConstants.Cross_Track_Threshold;
 if ~IsDone 
 %     Reward = -lateral_error^2 + 2*pose.Twist.Twist.Linear.X^2 + 4*dist_travel - 2*pose.Twist.Twist.Angular.Z^2;
 %     Reward = -2*lateral_error^2 -1.5*(5-VelCommand)^2 + 0.5*total_distance - 0.5*pose.Twist.Twist.Angular.Z^2;
-    Reward = -(1-VelCommand)^2 - 0.2*(cross_track_error)^2 + 0.08*total_distance;
+% -0.5x^2 - 0.2y^2 - 3*c^2 + 0.08*d
+    Reward = -0.5*(1.5-VelCommand)^2 - 0.2*(cross_track_error)^2 -3*(imu.AngularVelocity.Z)^2 + 0.08*total_distance;
 else
     Reward = -10;
 end
@@ -279,9 +286,10 @@ function [InitialObservation, LoggedSignal] = myResetFunctionCustom(envConstants
     pause(2)
     end
     pose = get_pose(envConstants);
+    imu = receive(envConstants.imu_sub);
     cross_track_error = cte(pose,envConstants.controller);
     [v, omega,lookahead] = envConstants.controller(pose');
-    temp = [pose(1);pose(2);pose(3);cross_track_error;lookahead(1);lookahead(2);0];
+    temp = [pose(1);pose(2);pose(3);imu.AngularVelocity.Z;cross_track_error;lookahead(1);lookahead(2);0];
     LoggedSignal.State = double(temp);
     InitialObservation = LoggedSignal.State;
     setGlobal_dist_covered(0)

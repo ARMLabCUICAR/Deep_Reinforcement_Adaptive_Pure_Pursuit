@@ -62,13 +62,12 @@ figure(1)
 % plot(path(:,1), path(:,2),'k--d');
 % xlim([-4 9])
 % ylim([-7 3])
-
+hold all;
 % lookahead_old = [0 0];
 
 
-k = 1;
-i = 0;
-while k < 15
+k =1;
+while k < 5
 %    controller.LookaheadDistance = randi([1,5],1,1);
    [v, omega,lookahead] = controller(pose);
    point.X = lookahead(1);
@@ -81,12 +80,8 @@ while k < 15
    send(vel_pub, msg);
    pose = get_pose(amcl_pose);
    imu = receive(imu_data);
-   scatter(i,imu.AngularVelocity.Z) 
-   ylim([0,2])
-   hold on
-   drawnow
+   plot(imu.LinearAcceleration.Z,'-r') 
    distanceToGoal = norm(pose(1:2) - robotGoal(:));
-   i = i+1;
    
 end
 msg.Linear.X = 0;

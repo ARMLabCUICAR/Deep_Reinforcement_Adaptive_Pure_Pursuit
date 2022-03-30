@@ -170,7 +170,7 @@ agentOptions = rlTD3AgentOptions(...
 % agentOptions.NoiseOptions.StandardDeviationDecayRate = 1e-3;
 
 agent = rlTD3Agent(actor,critic,agentOptions);
-maxepisodes = 1000;
+maxepisodes = 250;
 maxsteps = 500;
 trainingOpts = rlTrainingOptions('MaxEpisodes',maxepisodes,'MaxStepsPerEpisode',maxsteps,'Verbose',false,'Plots','training-progress','StopTrainingCriteria','EpisodeReward','StopTrainingValue',7500);
 
@@ -248,7 +248,7 @@ total_distance = get_dist + dist_travel;
 distanceToGoal = norm(pose(1:2) - envConstants.robotGoal(:));
 setGlobal_dist_covered(total_distance)
 
-IsDone =   cross_track_error > envConstants.Cross_Track_Threshold || distanceToGoal <= envConstants.Dist_to_Goal_Threshold;
+IsDone =   cross_track_error > envConstants.Cross_Track_Threshold;
 if ~IsDone 
 %     Reward = -lateral_error^2 + 2*pose.Twist.Twist.Linear.X^2 + 4*dist_travel - 2*pose.Twist.Twist.Angular.Z^2;
 %     Reward = -2*lateral_error^2 -1.5*(5-VelCommand)^2 + 0.5*total_distance - 0.5*pose.Twist.Twist.Angular.Z^2;
