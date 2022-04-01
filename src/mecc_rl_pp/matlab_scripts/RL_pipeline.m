@@ -1,4 +1,4 @@
-rosshutdown;clear;clc;
+rosshutdown;clear;clc;clear global;
 ipaddress = "http://localhost:11311";
 rosinit(ipaddress)
 
@@ -63,6 +63,7 @@ ActionInfo.Description = 'forward vel,lookahead_dist';
 [vel_pub,vel_msg] = rospublisher("/husky_velocity_controller/cmd_vel", "geometry_msgs/Twist");
 pose_sub = rossubscriber('/amcl_pose');
 imu_sub = rossubscriber('/imu/data','DataFormat','struct');
+odom_sub = rossubscriber('husky_velocity_controller/odom','DataFormat','struct');
 
 %Rosservice setup
 % Reset model_state service
@@ -93,7 +94,7 @@ envConstants.vel_pub = vel_pub;
 envConstants.vel_msg = vel_msg;
 envConstants.pose_sub = pose_sub;
 envConstants.dist_covered = 0;
-envConstants.is_training = 1;
+envConstants.is_training = 1; % 1 for training mode; 0 for testing
 envConstants.save_data = 0;
 envConstants.model_state_client = model_state_client;
 envConstants.model_state_req = model_state_req;
@@ -113,6 +114,7 @@ envConstants.robotGoal = path(end,:);
 envConstants.viz_pub = viz_pub;
 envConstants.viz_msg = viz_msg;
 envConstants.imu_sub = imu_sub;
+envConstants.odom_sub = odom_sub;
 
 disp('Entering loop')
 StepHandle = @(Action,LoggedSignals) myStepFunctionCustom(Action,LoggedSignals,envConstants);
@@ -177,23 +179,23 @@ agentOptions = rlTD3AgentOptions(...
 % agentOptions.NoiseOptions.StandardDeviationDecayRate = 1e-3;
 
 agent = rlTD3Agent(actor,critic,agentOptions);
-maxepisodes = 250;
-maxsteps = 500;
-trainingOpts = rlTrainingOptions('MaxEpisodes',maxepisodes,'MaxStepsPerEpisode',maxsteps,'Verbose',false,'Plots','training-progress','StopTrainingCriteria','EpisodeReward','StopTrainingValue',7500);
+maxepisodes = 50;
+maxsteps = 1500;
+trainingOpts = rlTrainingOptions('MaxEpisodes',maxepisodes,'MaxStepsPerEpisode',maxsteps,'Verbose',false,'Plots','training-progress','StopTrainingCriteria','EpisodeReward','StopTrainingValue',50);
 
 if envConstants.is_training == 1
     trainingStats = train(agent,env,trainingOpts);
-%     save("/home/ajoglek/RL_PID_controller_git/Berlin/agent_6_5_11_14_2214","agent")
+%     save("/home/ajoglek/Mecc_22_ws/src/mecc_rl_pp/agents/eureka_world_simple","agent")
 else
-    load('/home/ajoglek/RL_PID_controller_git/Berlin/agent_6_5_11_14_2028.mat','agent');
-    simOpts = rlSimulationOptions('MaxSteps',1500);
+    load("/home/ajoglek/Mecc_22_ws/src/mecc_rl_pp/agents/eureka.mat",'agent');
+    simOpts = rlSimulationOptions('MaxSteps',2500);
     sim(env,agent,simOpts)
 end
-% data_agent = getGlobal_data;
-% save('/home/ajoglek/RL_PID_controller_git/Results/Berlin_agent/berlin_agent_6_5_08_31_1602_round_track','data_agent')
-% disp('Saved')
-% pause(inf) 
-% exit
+data_agent = getGlobal_data;
+save('/home/ajoglek/Mecc_22_ws/src/mecc_rl_pp/agents/bumpy_world_data_updated','data_agent')
+disp('Saved')
+pause(inf) 
+exit
    
 
 %% Step function
@@ -235,12 +237,13 @@ send(envConstants.vel_pub,envConstants.vel_msg);
 % Get the new state 
 pose = get_pose(envConstants);
 imu = receive(envConstants.imu_sub);
+odom = receive(envConstants.odom_sub);
 call(envConstants.gazebo_pause_client,envConstants.gazebo_pause_req,"Timeout",3);
 cross_track_error = cte(pose,envConstants.controller);
 
-% if envConstants.save_data == 1 %Correct this later
-%     setGlobaldata(X,Y,Z,VelCommand,angle_input,Obs_Vel,lateral_error,front_error)
-% end
+if envConstants.save_data == 1 %To save the data
+    setGlobaldata(pose(1),pose(2),pose(3),imu.AngularVelocity.Z,cross_track_error,lookahead_pt(1),lookahead_pt(2),odom.Twist.Twist.Linear.X)
+end
 
 temp = [pose(1);pose(2);pose(3);imu.AngularVelocity.Z;cross_track_error;lookahead_pt(1);lookahead_pt(2);VelCommand];
 LoggedSignals.State = double(temp);
@@ -261,7 +264,7 @@ if ~IsDone
 % -0.5x^2 - 0.2y^2 - 3*c^2 + 0.08*d
     Reward = -0.5*(1.5-VelCommand)^2 - 0.2*(cross_track_error)^2 -3*(imu.AngularVelocity.Z)^2 + 0.08*total_distance;
 else
-    Reward = -10;
+    Reward = -1000;
 end
 call(envConstants.gazebo_unpause_client,envConstants.gazebo_unpause_req,"Timeout",3); 
 end
@@ -329,26 +332,26 @@ global dist_covered
 get_dist = dist_covered;
 end
 
-function setGlobaldata(X,Y,Z,VelCommand,angle_input,Obs_Vel,lateral_error,front_error)
-    global data_X; global data_Y; global data_Z; global data_Vel; global data_Steer; global data_obs_Vel; global data_lateral_error;global data_front_error
+function setGlobaldata(X,Y,Z,imu_vel_z,cross_track_error,lookahead_x,lookahead_y,lin_vel)
+    global data_X; global data_Y; global data_Z; global data_imu_vel_z; global data_cross_track_error; global data_lookahead_x; global data_lookahead_y;global data_lin_vel
     data_X = [data_X X];
     data_Y = [data_Y Y];
     data_Z = [data_Z Z];
-    data_Vel = [data_Vel VelCommand];
-    data_Steer = [data_Steer angle_input];
-    data_obs_Vel = [data_obs_Vel Obs_Vel];
-    data_lateral_error = [data_lateral_error lateral_error];
-    data_front_error = [data_front_error front_error];
+    data_imu_vel_z = [data_imu_vel_z imu_vel_z];
+    data_cross_track_error = [data_cross_track_error cross_track_error];
+    data_lookahead_x = [data_lookahead_x lookahead_x];
+    data_lookahead_y = [data_lookahead_y lookahead_y];
+    data_lin_vel = [data_lin_vel lin_vel];
 end
 
 function data_agent = getGlobal_data
-    global data_X; global data_Y; global data_Z; global data_Vel; global data_Steer; global data_obs_Vel; global data_lateral_error;global data_front_error
-    data_agent.data.states.X = data_X;
-    data_agent.data.states.Y = data_Y;
-    data_agent.data.angular.Z = data_Z;
-    data_agent.data.actions.Vel = data_Vel;
-    data_agent.data.actions.Steer = data_Steer;
-    data_agent.data.obs.Vel =  data_obs_Vel;  
-    data_agent.data.lateral_error =  data_lateral_error; 
-    data_agent.data.front_error =  data_front_error; 
+    global data_X; global data_Y; global data_Z; global data_imu_vel_z; global data_cross_track_error; global data_lookahead_x; global data_lookahead_y;global data_lin_vel
+    data_agent.data_X  = data_X;
+    data_agent.data_Y = data_Y;
+    data_agent.data_Z= data_Z;
+    data_agent.data_imu_vel_z = data_imu_vel_z;
+    data_agent.data_cross_track_error = data_cross_track_error;
+    data_agent.data_lookahead_x =  data_lookahead_x;  
+    data_agent.data_lookahead_y =  data_lookahead_y; 
+    data_agent.data_lin_vel =  data_lin_vel; 
 end
